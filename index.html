@@ -2,7 +2,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>The Great Roast Dinner Timing Chart</title>
+  <title>Eggleton Christmas Dinner Timing Chart</title>
   <meta name="description" content="This page uses some Javascript magic to automatically generate you a list of timed instructions for creating the perfect roast dinner.">
   <style type="text/css">
   body{margin:40px auto;max-width:750px;font-size:16px;font-family:sans-serif;color:#222;padding:0 10px}
@@ -26,7 +26,7 @@
 </head>
 <body onload="setup();">
 
-  <h1>The Great Roast Dinner Timing Chart</h1>
+  <h1>Eggleton Christmas Dinner Timing Chart</h1>
   
   <noscript><p class="warn"><strong>Sorry, this page requires JavaScript to function.</strong></p></noscript>
     
@@ -36,8 +36,8 @@
     <legend>Meat</legend>
     <span id="meatList"></span><br/>
     Weight: <input id="weight" style="width:4em;" value="3.5"/>
-    <input type="radio" name="unit" class="unitRadioButton" value="lb" id="radioLB" checked/><label for="radioLB">lb</label>
-    <input type="radio" name="unit" class="unitRadioButton" value="kg" id="radioKG"/><label for="radioKG">kg</label>
+    <input type="radio" name="unit" class="unitRadioButton" value="lb" id="radioLB"/><label for="radioLB">lb</label>
+    <input type="radio" name="unit" class="unitRadioButton" value="kg" id="radioKG" checked/><label for="radioKG">kg</label>
   </fieldset>
   <fieldset>
     <legend>Vegetables</legend>
@@ -49,7 +49,7 @@
   </fieldset>
   <fieldset>
     <legend>Serving Time</legend>
-    <input type="text" id="serveTime" size="8" value="7:00 pm"/>
+    <input type="text" id="serveTime" size="8" value="1:00 pm"/>
   </fieldset>
   
   <p></p>
@@ -66,11 +66,12 @@
 // Declare "meat" ingredient map. The keys to the map are the meat names. Each value is an
 // array of [X, Y], where the cooking time is "X minutes per lb plus Y minutes".
 var meats = new Map();
+
+meats.set('Turkey', [10, 70]);
 meats.set('Chicken', [25, 25]);
 meats.set('Pork', [35, 35]);
 meats.set('Beef', [25, 25]);
 meats.set('Lamb', [25, 25]);
-meats.set('Turkey', [10, 70]);
 
 // Declare "veg" and "extras" ingredient maps. The keys to the top-level map are ingredient names. Each value
 // is itself a map where the key is a number of "minutes before serving time" and the value
@@ -206,12 +207,29 @@ function setup() {
   jQuery('#radio0').button( "refresh" );
   jQuery('#vegCheckbox0').prop("checked", true);
   jQuery('#vegCheckbox0').button( "refresh" );
-  jQuery('#vegCheckbox2').prop("checked", true);
-  jQuery('#vegCheckbox2').button( "refresh" );
+  jQuery('#vegCheckbox1').prop("checked", true);
+  jQuery('#vegCheckbox1').button( "refresh" );
+
+  jQuery('#vegCheckbox3').prop("checked", true);
+  jQuery('#vegCheckbox3').button( "refresh" );
+
+  jQuery('#vegCheckbox5').prop("checked", true);
+  jQuery('#vegCheckbox5').button( "refresh" );
+
+
+  jQuery('#vegCheckbox8').prop("checked", true);
+  jQuery('#vegCheckbox8').button( "refresh" );
+
+
+  jQuery('#vegCheckbox9').prop("checked", true);
+  jQuery('#vegCheckbox9').button( "refresh" );
+
   jQuery('#extraCheckbox0').prop("checked", true);
   jQuery('#extraCheckbox0').button( "refresh" );
   jQuery('#extraCheckbox5').prop("checked", true);
   jQuery('#extraCheckbox5').button( "refresh" );
+  jQuery('#extraCheckbox6').prop("checked", true);
+  jQuery('#extraCheckbox6').button( "refresh" );
   recalculate();
 }
 
