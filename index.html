@@ -16,6 +16,12 @@
   table{border-collapse: collapse;}
   td{margin:0.5em; padding:0.5em; border-bottom:1px solid gray;}
   td.timetd{white-space: nowrap;}
+  .nudge-controls{display:inline-flex;flex-direction:column;margin-left:5px;}
+  .nudge-controls button{font-size:10px;line-height:12px;padding:0 4px;margin:0;width:20px;height:15px;}
+  .alarm-btn{margin-left:5px;padding:2px 6px;font-size:12px;cursor:pointer;}
+  .alarm-btn.active{background-color:#4CAF50;color:white;}
+  .alarm-btn.ringing{background-color:#ff5722;color:white;animation:pulse 1s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
   p.warn{color:red}
   p.footer{color:gray;margin-top:2em;font-size:12px}
   </style>
@@ -50,6 +56,13 @@
   <fieldset>
     <legend>Serving Time</legend>
     <input type="text" id="serveTime" size="8" value="1:00 pm"/>
+  </fieldset>
+  
+  <fieldset>
+    <legend>Alarms</legend>
+    <button id="testAudio" onclick="testAudio()" style="padding:8px 16px;font-size:16px;cursor:pointer;margin-right:10px;">🔊 Test Sound</button>
+    <button id="enableAllAlarms" onclick="enableAllAlarms()" style="padding:8px 16px;font-size:16px;cursor:pointer;">🔔 Enable All Alarms</button>
+    <span id="alarmStatus" style="margin-left:10px;color:#666;"></span>
   </fieldset>
   
   <p></p>
@@ -148,9 +161,18 @@ extras.set('Gravy (from granules)', new Map([
 ]));
 
 var custom = new Map();
+var timeAdjustments = new Map(); // Store timing nudges
+var alarms = new Map(); // Store active alarms
+var alarmCheckInterval = null;
+var currentAlarmAudio = null; // Track current alarm audio
+var audioContextInitialized = false; // Track if audio context is ready
+var audioContext = null; // Persistent audio context
 
 // Set up the page contents
 function setup() {  
+  // Load state from localStorage
+  loadState();
+  
   // Set up meat radio buttons
   meatRadioButtonHTML = '';
   ings = Array.from( meats.keys() );
@@ -231,10 +253,15 @@ function setup() {
   jQuery('#extraCheckbox6').prop("checked", true);
   jQuery('#extraCheckbox6').button( "refresh" );
   recalculate();
+  
+  // Start alarm checking interval
+  startAlarmChecking();
 }
 
 // Recalculate timings
 function recalculate() {
+  // Save state to localStorage
+  saveState();
   // Figure out which side ingredients are selected
   chosenVeg = new Array();
   jQuery('.vegCheckbox').each(function () {
@@ -311,6 +338,20 @@ function recalculate() {
     return parseInt(b) - parseInt(a);
   }));
   
+  // Set all alarms to inactive by default if not already set
+  steps.forEach(function(value, key) {
+    if (!alarms.has(key)) {
+      alarms.set(key, {active: false, triggered: false, instruction: value});
+    } else {
+      // Update instruction text in case it changed
+      var alarmData = alarms.get(key);
+      alarmData.instruction = value;
+    }
+  });
+  
+  // Update alarm status display
+  updateAlarmStatus();
+  
   // Get the serving time
   serveTime = jQuery('#serveTime').timespinner('value')
 
@@ -334,8 +375,23 @@ function recalculate() {
       tableHTML += formatCustom(customTimings.shift());
     }
 
-    actualTime = new Date(serveTime - (parseInt(key) * 60000));
-    tableHTML += '<tr><td valign="top" class="timetd"><strong>' + formatTime(actualTime) + '</strong><br><button onclick="javascript:addCustom(' + key + ')">+</button></td><td>' + value + '</td></tr>';
+    // Apply time adjustment if any
+    var adjustment = timeAdjustments.get(key) || 0;
+    var adjustedKey = key - adjustment;
+    actualTime = new Date(serveTime - (adjustedKey * 60000));
+    
+    // Check if alarm is set for this step
+    var alarmData = alarms.get(key);
+    var alarmActive = alarmData && alarmData.active;
+    var alarmClass = alarmActive ? 'active' : '';
+    
+    tableHTML += '<tr id="step-' + key + '"><td valign="top" class="timetd"><strong>' + formatTime(actualTime) + '</strong>';
+    tableHTML += '<div class="nudge-controls"><button onclick="nudgeTime(' + key + ', -5)">▲</button><button onclick="nudgeTime(' + key + ', 5)">▼</button></div>';
+    if (adjustment !== 0) {
+      tableHTML += '<br><small style="color:#666;">(' + (adjustment > 0 ? '+' : '') + adjustment + ' min)</small>';
+    }
+    tableHTML += '<br><button class="alarm-btn ' + alarmClass + '" id="alarm-' + key + '" onclick="toggleAlarm(' + key + ')">🔔</button>';
+    tableHTML += '<br><button onclick="javascript:addCustom(' + key + ')">+</button></td><td>' + value + '</td></tr>';
   });
   if (customTimings.length)
       tableHTML += formatCustom(customTimings.shift());
@@ -402,6 +458,334 @@ function formatCustom(c) {
       html += '<tr><td><button onclick="javascript:deleteCustom(' + c.time + ', ' + i + ')">&times;</button></td><td>' + c.notes[i] + '</td></tr>';
     };
     return html;
+}
+
+// Nudge timing up or down
+function nudgeTime(key, minutes) {
+  var currentAdjustment = timeAdjustments.get(key) || 0;
+  timeAdjustments.set(key, currentAdjustment + minutes);
+  recalculate();
+}
+
+// Toggle alarm for a step
+function toggleAlarm(key) {
+  if (alarms.has(key)) {
+    var alarmData = alarms.get(key);
+    alarmData.active = !alarmData.active;
+  } else {
+    alarms.set(key, {active: true, triggered: false});
+  }
+  recalculate();
+  updateAlarmStatus();
+}
+
+// Check if any alarms should trigger
+function checkAlarms() {
+  var now = new Date();
+  var serveTime = jQuery('#serveTime').timespinner('value');
+  
+  alarms.forEach(function(alarmData, key) {
+    if (!alarmData.active) return;
+    
+    var adjustment = timeAdjustments.get(key) || 0;
+    var adjustedKey = key - adjustment;
+    var alarmTime = new Date(serveTime - (adjustedKey * 60000));
+    
+    // Trigger if within 30 seconds of alarm time and not already triggered
+    var timeDiff = alarmTime - now;
+    if (timeDiff <= 30000 && timeDiff >= -30000 && !alarmData.triggered) {
+      triggerAlarm(key, alarmData.instruction);
+      alarmData.triggered = true;
+    }
+    
+    // Reset triggered status if we're more than 1 minute past the alarm
+    if (timeDiff < -60000) {
+      alarmData.triggered = false;
+    }
+  });
+}
+
+// Trigger an alarm with audio and visual feedback
+async function triggerAlarm(key, instruction) {
+  // Visual feedback
+  var alarmBtn = document.getElementById('alarm-' + key);
+  if (alarmBtn) {
+    alarmBtn.classList.add('ringing');
+  }
+  
+  // Play audio (this will take ~2.5 seconds)
+  await playAlarmSound();
+  
+  // Show alert with instruction text
+  var adjustment = timeAdjustments.get(key) || 0;
+  var adjustedKey = key - adjustment;
+  var stripHTML = instruction.replace(/<br\/?>/gi, '\n').replace(/<[^>]+>/g, '');
+  alert('⏰ TIME FOR NEXT COOKING STEP! ⏰\n\n' + stripHTML);
+  
+  // Remove ringing class
+  if (alarmBtn) {
+    alarmBtn.classList.remove('ringing');
+  }
+  
+  // Scroll the step into view
+  var stepRow = document.getElementById('step-' + key);
+  if (stepRow) {
+    stepRow.scrollIntoView({behavior: 'smooth', block: 'center'});
+  }
+}
+
+// Play alarm sound - louder and repeating
+async function playAlarmSound() {
+  if (!audioContext) {
+    console.log('Audio context not initialized');
+    return;
+  }
+  
+  try {
+    // Resume context if suspended
+    if (audioContext.state === 'suspended') {
+      console.log('Resuming audio context for alarm...');
+      await audioContext.resume();
+    }
+    
+    console.log('Playing alarm, audio state:', audioContext.state);
+    
+    // Play 5 beeps with delays
+    for (var i = 0; i < 5; i++) {
+      var oscillator = audioContext.createOscillator();
+      var gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.value = 880;
+      oscillator.type = 'sine';
+      
+      gainNode.gain.value = 0.3;
+      
+      oscillator.start();
+      console.log('Beep', i + 1, 'started');
+      
+      // Wait 300ms
+      await new Promise(resolve => setTimeout(resolve, 300));
+      oscillator.stop();
+      
+      // Wait 200ms between beeps
+      if (i < 4) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+    
+    console.log('All beeps completed');
+  } catch (e) {
+    console.log('Audio playback error', e);
+  }
+}
+
+// Stop alarm sound
+function stopAlarmSound() {
+  // Not needed with new approach, but keep for compatibility
+  console.log('Stop alarm called (no-op with new approach)');
+}
+
+// Initialize audio context (must be called from user interaction)
+function initAudioContext() {
+  try {
+    if (!audioContext) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      console.log('Audio context created, state:', audioContext.state);
+    }
+    return true;
+  } catch (e) {
+    console.log('Audio context initialization failed', e);
+    return false;
+  }
+}
+
+// Test audio functionality with a beep
+async function testAudio() {
+  console.log('Testing audio...');
+  
+  if (!audioContext) {
+    if (!initAudioContext()) {
+      alert('Audio initialization failed. Your browser may not support Web Audio API.');
+      return;
+    }
+  }
+  
+  try {
+    if (audioContext.state === 'suspended') {
+      console.log('Resuming suspended audio context...');
+      await audioContext.resume();
+    }
+    console.log('Audio context state:', audioContext.state);
+    audioContextInitialized = true;
+    
+    // Play a test beep
+    var testOsc = audioContext.createOscillator();
+    var testGain = audioContext.createGain();
+    testOsc.connect(testGain);
+    testGain.connect(audioContext.destination);
+    testOsc.frequency.value = 880;
+    testOsc.type = 'square';
+    testGain.gain.setValueAtTime(0.3, audioContext.currentTime);
+    testGain.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.2);
+    testOsc.start(audioContext.currentTime);
+    testOsc.stop(audioContext.currentTime + 0.2);
+    console.log('Test beep played successfully - audio is working!');
+  } catch (e) {
+    console.log('Audio test error:', e);
+    alert('Audio test failed: ' + e.message);
+  }
+}
+
+// Enable all alarms
+function enableAllAlarms() {
+  console.log('Enabling all alarms...');
+  
+  // Warn if audio hasn't been tested
+  if (!audioContext || !audioContextInitialized) {
+    if (!confirm('Audio hasn\'t been initialized yet. Click "Test Sound" first to ensure alarms will make noise.\n\nEnable alarms anyway?')) {
+      return;
+    }
+  }
+  
+  // Enable all alarms
+  alarms.forEach(function(alarmData) {
+    alarmData.active = true;
+  });
+  
+  recalculate();
+  updateAlarmStatus();
+  
+  alert('All alarms enabled! You will receive alerts at each cooking step.');
+}
+
+// Update alarm status display
+function updateAlarmStatus() {
+  var activeCount = 0;
+  var totalCount = 0;
+  alarms.forEach(function(alarmData) {
+    totalCount++;
+    if (alarmData.active) {
+      activeCount++;
+    }
+  });
+  
+  var statusText = activeCount + ' of ' + totalCount + ' alarms active';
+  if (audioContextInitialized) {
+    statusText += ' (audio ready)';
+  }
+  jQuery('#alarmStatus').text(statusText);
+}
+
+// Start checking for alarms
+function startAlarmChecking() {
+  if (alarmCheckInterval) {
+    clearInterval(alarmCheckInterval);
+  }
+  alarmCheckInterval = setInterval(checkAlarms, 5000); // Check every 5 seconds
+}
+
+// Save state to localStorage
+function saveState() {
+  try {
+    var state = {
+      meat: jQuery('.meatRadioButton:checked').val(),
+      weight: jQuery('#weight').val(),
+      unit: jQuery('.unitRadioButton:checked').val(),
+      veg: [],
+      extras: [],
+      serveTime: jQuery('#serveTime').val(),
+      custom: Object.fromEntries(Object.entries(custom)),
+      timeAdjustments: Array.from(timeAdjustments.entries()),
+      alarms: Array.from(alarms.entries()),
+      audioContextInitialized: audioContextInitialized
+    };
+    
+    jQuery('.vegCheckbox:checked').each(function() {
+      state.veg.push(jQuery(this).val());
+    });
+    
+    jQuery('.extrasCheckbox:checked').each(function() {
+      state.extras.push(jQuery(this).val());
+    });
+    
+    localStorage.setItem('roastDinnerState', JSON.stringify(state));
+  } catch (e) {
+    console.log('Could not save state', e);
+  }
+}
+
+// Load state from localStorage
+function loadState() {
+  try {
+    var stateStr = localStorage.getItem('roastDinnerState');
+    if (!stateStr) return;
+    
+    var state = JSON.parse(stateStr);
+    
+    // Restore weight and unit
+    if (state.weight) {
+      jQuery('#weight').val(state.weight);
+    }
+    
+    if (state.unit) {
+      jQuery('input[name="unit"][value="' + state.unit + '"]').prop('checked', true);
+    }
+    
+    // Restore serve time
+    if (state.serveTime) {
+      jQuery('#serveTime').val(state.serveTime);
+    }
+    
+    // Restore custom entries
+    if (state.custom) {
+      custom = state.custom;
+    }
+    
+    // Restore time adjustments
+    if (state.timeAdjustments) {
+      timeAdjustments = new Map(state.timeAdjustments);
+    }
+    
+    // Restore alarms
+    if (state.alarms) {
+      alarms = new Map(state.alarms);
+    }
+    
+    // Restore audio context state
+    if (state.audioContextInitialized) {
+      audioContextInitialized = state.audioContextInitialized;
+    }
+    
+    // Restore meat selection (needs to wait for UI to be ready)
+    setTimeout(function() {
+      if (state.meat) {
+        jQuery('.meatRadioButton[value="' + state.meat + '"]').prop('checked', true).button('refresh');
+      }
+      
+      // Restore veg selections
+      if (state.veg) {
+        jQuery('.vegCheckbox').prop('checked', false);
+        state.veg.forEach(function(v) {
+          jQuery('.vegCheckbox[value="' + v + '"]').prop('checked', true).button('refresh');
+        });
+      }
+      
+      // Restore extras selections
+      if (state.extras) {
+        jQuery('.extrasCheckbox').prop('checked', false);
+        state.extras.forEach(function(e) {
+          jQuery('.extrasCheckbox[value="' + e + '"]').prop('checked', true).button('refresh');
+        });
+      }
+      
+      recalculate();
+    }, 100);
+  } catch (e) {
+    console.log('Could not load state', e);
+  }
 }
 
 </script>
